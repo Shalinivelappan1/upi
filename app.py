@@ -1,186 +1,260 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from scipy.optimize import minimize
+import plotly.graph_objects as go
+from scipy.optimize import curve_fit
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="UPI Diffusion Lab", layout="wide")
 
-# -------------------------------
-# TITLE
-# -------------------------------
-st.title("📊 Digital Payments Diffusion Lab (Advanced)")
-st.markdown("Bass Diffusion + Policy Shocks + Economic Layer + Data Fitting")
+# =========================================================
+# 📂 DATA LOADER
+# =========================================================
+def load_data(file):
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file)
+    else:
+        df = pd.read_excel(file)
 
-# -------------------------------
-# SIDEBAR
-# -------------------------------
-st.sidebar.header("⚙️ Model Configuration")
+    df.columns = df.columns.str.strip()
 
-mode = st.sidebar.radio("Mode", ["Simulation", "Fit Real Data"])
+    # Clean volume
+    df["Volume"] = df["Volume"].astype(str).str.replace(",", "")
+    df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce")
 
-# -------------------------------
-# BASS MODEL
-# -------------------------------
-def bass_model(p, q, M, T):
-    adopters = np.zeros(T)
-    cumulative = np.zeros(T)
+    df = df.dropna()
 
-    for t in range(1, T):
-        adoption = (p + q * cumulative[t-1] / M) * (M - cumulative[t-1])
-        adopters[t] = adoption
-        cumulative[t] = cumulative[t-1] + adoption
+    # Ensure Period exists
+    if "Period" not in df.columns:
+        df["Period"] = np.arange(1, len(df) + 1)
 
-    return adopters, cumulative
+    return df
 
-# -------------------------------
-# SHOCK FUNCTION
-# -------------------------------
-def apply_shock(cumulative, shock_time, shock_strength, shock_type, M):
-    result = cumulative.copy()
 
-    for t in range(shock_time, len(cumulative)):
-        if shock_type == "Acceleration":
-            result[t] *= (1 + shock_strength)
-        elif shock_type == "Break":
-            result[t] *= (1 - abs(shock_strength))
-        elif shock_type == "Mandate":
-            result[t] += M * shock_strength * 0.2
+# =========================================================
+# 📈 BASS MODEL
+# =========================================================
+def bass_cumulative(t, p, q, M):
+    exp_term = np.exp(-(p + q) * t)
+    F_t = (1 - exp_term) / (1 + (q / p) * exp_term)
+    return M * F_t
 
-    return result
 
-# -------------------------------
-# PARAM INPUTS
-# -------------------------------
-st.sidebar.subheader("Bass Parameters")
+# =========================================================
+# ⚡ SHOCK MODEL
+# =========================================================
+def shock_function(t, shocks):
+    shock_effect = np.zeros_like(t, dtype=float)
 
-p = st.sidebar.slider("p (innovation)", 0.000001, 0.01, 0.00002, format="%.6f")
-q = st.sidebar.slider("q (imitation)", 0.001, 1.0, 0.06)
-M = st.sidebar.slider("Market Size", 1, 500, 100)
-T = st.sidebar.slider("Time Periods", 12, 120, 72)
+    for shock_time, magnitude, decay in shocks:
+        effect = magnitude * np.exp(-decay * np.maximum(0, t - shock_time))
+        shock_effect += effect
 
-# Shock
-st.sidebar.subheader("Shock")
-shock_type = st.sidebar.selectbox("Type", ["None", "Acceleration", "Break", "Mandate"])
-shock_time = st.sidebar.slider("Shock Time", 1, T, 36)
-shock_strength = st.sidebar.slider("Shock Strength", -0.5, 1.0, 0.3)
+    return shock_effect
+
+
+def bass_with_shocks(t, p, q, M, shocks):
+    base = bass_cumulative(t, p, q, M)
+    shock_effect = shock_function(t, shocks)
+    return base * (1 + shock_effect)
+
+
+# =========================================================
+# 🔍 PARAMETER ESTIMATION
+# =========================================================
+def estimate_bass_parameters(df):
+    t = df["Period"].values
+    y = df["Volume"].values
+
+    p0, q0, M0 = 0.0001, 0.1, max(y) * 1.5
+
+    try:
+        params, _ = curve_fit(
+            bass_cumulative,
+            t,
+            y,
+            p0=[p0, q0, M0],
+            bounds=(0, [1, 1, 1e8]),
+            maxfev=20000
+        )
+        return params
+    except:
+        return None
+
+
+# =========================================================
+# 🧠 PIECEWISE ESTIMATION
+# =========================================================
+def piecewise_estimation(df, split_point):
+    df_pre = df[df["Period"] <= split_point]
+    df_post = df[df["Period"] > split_point]
+
+    pre = estimate_bass_parameters(df_pre)
+    post = estimate_bass_parameters(df_post)
+
+    return pre, post
+
+
+# =========================================================
+# 💰 ECONOMICS
+# =========================================================
+def compute_economics(users, tx_per_user, cost, fee):
+    tx = users * tx_per_user
+    cost_total = np.sum(tx * cost)
+    revenue = np.sum(tx * fee)
+
+    return {
+        "Transactions": np.sum(tx),
+        "Cost": cost_total,
+        "Revenue": revenue,
+        "Profit": revenue - cost_total
+    }
+
+
+# =========================================================
+# 🎛 SIDEBAR
+# =========================================================
+st.sidebar.title("⚙️ Controls")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload CSV/Excel",
+    type=["csv", "xlsx"]
+)
+
+st.sidebar.subheader("Bass Parameters (Manual)")
+p = st.sidebar.slider("p (Innovation)", 0.000001, 0.01, 0.0001)
+q = st.sidebar.slider("q (Imitation)", 0.01, 1.0, 0.1)
+M = st.sidebar.slider("M (Market)", 1000, 20000, 10000)
+
+T = st.sidebar.slider("Simulation Periods", 10, 120, 60)
+
+# Shocks
+st.sidebar.subheader("⚡ Policy Shocks")
+scenario = st.sidebar.selectbox(
+    "Scenario",
+    ["None", "Demonetization", "COVID", "FASTag", "All"]
+)
+
+# Piecewise
+split_point = st.sidebar.slider("Split (COVID)", 20, 80, 45)
 
 # Economics
-st.sidebar.subheader("Economics")
+st.sidebar.subheader("💰 Economics")
+tx_per_user = st.sidebar.slider("Tx/User", 1, 100, 30)
+cost = st.sidebar.slider("Cost per Tx", 0.1, 5.0, 1.4)
+fee = st.sidebar.slider("Fee per Tx", 0.0, 2.0, 0.2)
 
-cost_per_tx = st.sidebar.slider("Bank Cost per Tx", 0.1, 5.0, 1.4)
-platform_fee = st.sidebar.slider("Platform Fee", 0.0, 2.0, 0.2)
-conversion_rate = st.sidebar.slider("Loan Conversion %", 0, 20, 5)
-avg_loan = st.sidebar.slider("Avg Loan", 1000, 100000, 20000)
 
-# -------------------------------
-# SIMULATION MODE
-# -------------------------------
-if mode == "Simulation":
+# =========================================================
+# 🎯 POLICY SHOCK MAPPER
+# =========================================================
+def get_shocks(scenario):
+    if scenario == "Demonetization":
+        return [(5, 0.6, 0.1)]
+    elif scenario == "COVID":
+        return [(45, -0.4, 0.2)]
+    elif scenario == "FASTag":
+        return [(40, 0.8, 0.05)]
+    elif scenario == "All":
+        return [(5, 0.6, 0.1), (40, 0.8, 0.05), (45, -0.4, 0.2)]
+    return []
 
-    adopters, cumulative = bass_model(p, q, M, T)
 
-    if shock_type != "None":
-        cumulative_shock = apply_shock(cumulative, shock_time, shock_strength, shock_type, M)
+# =========================================================
+# 🧠 MAIN
+# =========================================================
+st.title("📊 Digital Payments Diffusion Lab")
+
+if uploaded_file:
+    df = load_data(uploaded_file)
+    st.success("Data Loaded")
+
+    # Estimate
+    params = estimate_bass_parameters(df)
+
+    if params is not None:
+        p_est, q_est, M_est = params
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("p", f"{p_est:.6f}")
+        col2.metric("q", f"{q_est:.4f}")
+        col3.metric("M", f"{M_est:,.0f}")
+
+        ratio = q_est / p_est if p_est > 0 else 0
+        st.metric("q/p Ratio", f"{ratio:,.0f}x")
+
+        t = df["Period"].values
+
+        shocks = get_shocks(scenario)
+
+        fitted = bass_with_shocks(t, p_est, q_est, M_est, shocks)
+
+        # Plot
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=df["Volume"], name="Actual"))
+        fig.add_trace(go.Scatter(y=fitted, name="Model", line=dict(dash="dash")))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Piecewise
+        pre, post = piecewise_estimation(df, split_point)
+
+        if pre and post:
+            st.subheader("📊 Piecewise")
+            c1, c2 = st.columns(2)
+
+            c1.write(f"Pre-COVID p={pre[0]:.6f}, q={pre[1]:.4f}")
+            c2.write(f"Post-COVID p={post[0]:.6f}, q={post[1]:.4f}")
+
+        users = df["Volume"].values
+
     else:
-        cumulative_shock = cumulative
+        st.error("Estimation Failed")
+        users = df["Volume"].values
 
-    transactions = cumulative_shock * 10
-
-    # Economics
-    bank_cost = transactions * cost_per_tx
-    platform_revenue = transactions * platform_fee
-
-    converted_users = cumulative_shock * (conversion_rate / 100)
-    loan_volume = converted_users * avg_loan
-    platform_profit = platform_revenue + (loan_volume * 0.05)
-
-    # -------------------------------
-    # PLOTS
-    # -------------------------------
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Adoption Curve")
-
-        fig, ax = plt.subplots()
-        ax.plot(cumulative, label="Bass Forecast", linestyle="--")
-        ax.plot(cumulative_shock, label="Actual", linewidth=2)
-        ax.axvline(shock_time, linestyle=":", label="Shock")
-        ax.legend()
-
-        st.pyplot(fig)
-
-    with col2:
-        st.subheader("Economics")
-
-        fig, ax = plt.subplots()
-        ax.plot(bank_cost, label="Bank Cost")
-        ax.plot(platform_profit, label="Platform Profit")
-        ax.legend()
-
-        st.pyplot(fig)
-
-    # -------------------------------
-    # METRICS
-    # -------------------------------
-    st.subheader("Key Metrics")
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric("Final Users", f"{cumulative_shock[-1]:,.2f}")
-    c2.metric("Bank Cost", f"{bank_cost.sum():,.0f}")
-    c3.metric("Platform Profit", f"{platform_profit.sum():,.0f}")
-
-    # Interpretation
-    st.subheader("Insight")
-
-    if q > p * 1000:
-        st.success("Network effects dominate (UPI-like)")
-    elif shock_type == "Break":
-        st.warning("Structural break detected (IMPS-like)")
-    elif shock_type == "Mandate":
-        st.info("Policy-driven adoption (FASTag-like)")
-    else:
-        st.write("Moderate diffusion")
-
-# -------------------------------
-# FIT REAL DATA MODE
-# -------------------------------
 else:
-    st.subheader("Upload Data")
+    st.warning("Using Simulation Mode")
 
-    file = st.file_uploader("Upload CSV with 'time' and 'adoption' columns")
+    t = np.arange(1, T + 1)
+    shocks = get_shocks(scenario)
 
-    if file:
-        df = pd.read_csv(file)
+    users = bass_with_shocks(t, p, q, M, shocks)
 
-        y = df["adoption"].values
-        T = len(y)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=users, name="Simulated"))
+    st.plotly_chart(fig, use_container_width=True)
 
-        def loss(params):
-            p, q, M = params
-            _, pred = bass_model(p, q, M, T)
-            return np.mean((y - pred) ** 2)
 
-        result = minimize(loss, [0.001, 0.1, max(y)], bounds=[(1e-6,1),(1e-6,1),(max(y), 10*max(y))])
+# =========================================================
+# 💰 ECONOMICS
+# =========================================================
+st.subheader("💰 Economics")
 
-        p_fit, q_fit, M_fit = result.x
+econ = compute_economics(users, tx_per_user, cost, fee)
 
-        _, pred = bass_model(p_fit, q_fit, M_fit, T)
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Transactions", f"{econ['Transactions']:,.0f}")
+c2.metric("Cost", f"₹{econ['Cost']/1e9:.2f}B")
+c3.metric("Revenue", f"₹{econ['Revenue']/1e9:.2f}B")
+c4.metric("Profit", f"₹{econ['Profit']/1e9:.2f}B")
 
-        st.write("### Estimated Parameters")
-        st.write(f"p: {p_fit:.6f}")
-        st.write(f"q: {q_fit:.4f}")
-        st.write(f"M: {M_fit:.2f}")
+# =========================================================
+# 🔥 HEATMAP (q/p LANDSCAPE)
+# =========================================================
+st.subheader("🔥 Imitation vs Innovation Landscape")
 
-        fig, ax = plt.subplots()
-        ax.plot(y, label="Actual")
-        ax.plot(pred, label="Fitted Bass", linestyle="--")
-        ax.legend()
+p_vals = np.linspace(0.00001, 0.001, 20)
+q_vals = np.linspace(0.01, 0.2, 20)
 
-        st.pyplot(fig)
+Z = np.zeros((len(q_vals), len(p_vals)))
 
-        # Export
-        output = pd.DataFrame({"Actual": y, "Fitted": pred})
-        st.download_button("Download Results", output.to_csv(index=False), "results.csv")
+for i, qv in enumerate(q_vals):
+    for j, pv in enumerate(p_vals):
+        Z[i, j] = qv / pv
+
+fig = go.Figure(data=go.Heatmap(
+    z=Z,
+    x=np.round(p_vals, 6),
+    y=np.round(q_vals, 3),
+    colorbar_title="q/p"
+))
+
+st.plotly_chart(fig, use_container_width=True)
