@@ -2,51 +2,25 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize
 
 st.set_page_config(layout="wide")
 
 # -------------------------------
 # TITLE
 # -------------------------------
-st.title("📊 Digital Payments Diffusion Simulator (UPI Lab)")
-
-st.markdown("""
-Simulate adoption dynamics using the **Bass Diffusion Model** + **Policy Shocks + Economics Layer**
-""")
+st.title("📊 Digital Payments Diffusion Lab (Advanced)")
+st.markdown("Bass Diffusion + Policy Shocks + Economic Layer + Data Fitting")
 
 # -------------------------------
-# SIDEBAR INPUTS
+# SIDEBAR
 # -------------------------------
-st.sidebar.header("🔧 Model Parameters")
+st.sidebar.header("⚙️ Model Configuration")
 
-p = st.sidebar.slider("Innovation (p)", 0.000001, 0.01, 0.00002, format="%.6f")
-q = st.sidebar.slider("Imitation (q)", 0.001, 1.0, 0.06)
-M = st.sidebar.slider("Market Size (Millions)", 1, 1000, 100)
-
-time_periods = st.sidebar.slider("Time (months)", 12, 120, 72)
-
-# Shock inputs
-st.sidebar.header("⚡ Policy / Shock Events")
-
-shock_time = st.sidebar.slider("Shock Time (month)", 1, time_periods, 36)
-shock_strength = st.sidebar.slider("Shock Strength (+ boost / - break)", -0.5, 1.0, 0.3)
-
-shock_type = st.sidebar.selectbox(
-    "Shock Type",
-    ["None", "Acceleration (Demonetization)", "Break (COVID)", "Mandate (FASTag)"]
-)
-
-# Economics inputs
-st.sidebar.header("💰 Economics Layer")
-
-cost_per_tx = st.sidebar.slider("Bank Cost per Tx (₹)", 0.1, 5.0, 1.4)
-platform_fee = st.sidebar.slider("Platform Fee per Tx (₹)", 0.0, 2.0, 0.2)
-
-conversion_rate = st.sidebar.slider("Credit Conversion (%)", 0, 20, 5)
-avg_loan = st.sidebar.slider("Avg Loan Value (₹)", 1000, 100000, 20000)
+mode = st.sidebar.radio("Mode", ["Simulation", "Fit Real Data"])
 
 # -------------------------------
-# BASS MODEL FUNCTION
+# BASS MODEL
 # -------------------------------
 def bass_model(p, q, M, T):
     adopters = np.zeros(T)
@@ -60,111 +34,153 @@ def bass_model(p, q, M, T):
     return adopters, cumulative
 
 # -------------------------------
-# BASE SIMULATION
+# SHOCK FUNCTION
 # -------------------------------
-adopters, cumulative = bass_model(p, q, M, time_periods)
+def apply_shock(cumulative, shock_time, shock_strength, shock_type, M):
+    result = cumulative.copy()
 
-# -------------------------------
-# APPLY SHOCK
-# -------------------------------
-cumulative_shock = cumulative.copy()
+    for t in range(shock_time, len(cumulative)):
+        if shock_type == "Acceleration":
+            result[t] *= (1 + shock_strength)
+        elif shock_type == "Break":
+            result[t] *= (1 - abs(shock_strength))
+        elif shock_type == "Mandate":
+            result[t] += M * shock_strength * 0.2
 
-if shock_type != "None":
-    for t in range(shock_time, time_periods):
-        if shock_type == "Acceleration (Demonetization)":
-            cumulative_shock[t] *= (1 + shock_strength)
-
-        elif shock_type == "Break (COVID)":
-            cumulative_shock[t] *= (1 - abs(shock_strength))
-
-        elif shock_type == "Mandate (FASTag)":
-            cumulative_shock[t] += M * shock_strength * 0.2
+    return result
 
 # -------------------------------
-# TRANSACTION VOLUME (proxy)
+# PARAM INPUTS
 # -------------------------------
-transactions = cumulative_shock * 10  # assume 10 tx per user
+st.sidebar.subheader("Bass Parameters")
 
-# -------------------------------
-# ECONOMICS
-# -------------------------------
-bank_cost = transactions * cost_per_tx
-platform_revenue = transactions * platform_fee
+p = st.sidebar.slider("p (innovation)", 0.000001, 0.01, 0.00002, format="%.6f")
+q = st.sidebar.slider("q (imitation)", 0.001, 1.0, 0.06)
+M = st.sidebar.slider("Market Size", 1, 500, 100)
+T = st.sidebar.slider("Time Periods", 12, 120, 72)
 
-# Lending engine
-converted_users = cumulative_shock * (conversion_rate / 100)
-loan_volume = converted_users * avg_loan
-platform_profit = platform_revenue + (loan_volume * 0.05)
+# Shock
+st.sidebar.subheader("Shock")
+shock_type = st.sidebar.selectbox("Type", ["None", "Acceleration", "Break", "Mandate"])
+shock_time = st.sidebar.slider("Shock Time", 1, T, 36)
+shock_strength = st.sidebar.slider("Shock Strength", -0.5, 1.0, 0.3)
 
-# -------------------------------
-# PLOTS
-# -------------------------------
-col1, col2 = st.columns(2)
+# Economics
+st.sidebar.subheader("Economics")
 
-with col1:
-    st.subheader("📈 Adoption Curve")
-
-    fig, ax = plt.subplots()
-    ax.plot(cumulative, label="Bass Forecast", linestyle="--")
-    ax.plot(cumulative_shock, label="Actual (with shocks)", linewidth=2)
-
-    ax.axvline(shock_time, linestyle=":", label="Shock Event")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Adoption")
-    ax.legend()
-
-    st.pyplot(fig)
-
-with col2:
-    st.subheader("💳 Transaction Volume")
-
-    fig, ax = plt.subplots()
-    ax.plot(transactions, color="blue")
-    ax.set_title("Transaction Volume Over Time")
-
-    st.pyplot(fig)
+cost_per_tx = st.sidebar.slider("Bank Cost per Tx", 0.1, 5.0, 1.4)
+platform_fee = st.sidebar.slider("Platform Fee", 0.0, 2.0, 0.2)
+conversion_rate = st.sidebar.slider("Loan Conversion %", 0, 20, 5)
+avg_loan = st.sidebar.slider("Avg Loan", 1000, 100000, 20000)
 
 # -------------------------------
-# ECONOMICS VISUAL
+# SIMULATION MODE
 # -------------------------------
-st.subheader("💰 System Economics")
+if mode == "Simulation":
 
-fig, ax = plt.subplots()
+    adopters, cumulative = bass_model(p, q, M, T)
 
-ax.plot(bank_cost, label="Bank Cost", linewidth=2)
-ax.plot(platform_profit, label="Platform Profit", linewidth=2)
+    if shock_type != "None":
+        cumulative_shock = apply_shock(cumulative, shock_time, shock_strength, shock_type, M)
+    else:
+        cumulative_shock = cumulative
 
-ax.set_title("Cross-Subsidy Engine")
-ax.legend()
+    transactions = cumulative_shock * 10
 
-st.pyplot(fig)
+    # Economics
+    bank_cost = transactions * cost_per_tx
+    platform_revenue = transactions * platform_fee
+
+    converted_users = cumulative_shock * (conversion_rate / 100)
+    loan_volume = converted_users * avg_loan
+    platform_profit = platform_revenue + (loan_volume * 0.05)
+
+    # -------------------------------
+    # PLOTS
+    # -------------------------------
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Adoption Curve")
+
+        fig, ax = plt.subplots()
+        ax.plot(cumulative, label="Bass Forecast", linestyle="--")
+        ax.plot(cumulative_shock, label="Actual", linewidth=2)
+        ax.axvline(shock_time, linestyle=":", label="Shock")
+        ax.legend()
+
+        st.pyplot(fig)
+
+    with col2:
+        st.subheader("Economics")
+
+        fig, ax = plt.subplots()
+        ax.plot(bank_cost, label="Bank Cost")
+        ax.plot(platform_profit, label="Platform Profit")
+        ax.legend()
+
+        st.pyplot(fig)
+
+    # -------------------------------
+    # METRICS
+    # -------------------------------
+    st.subheader("Key Metrics")
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Final Users", f"{cumulative_shock[-1]:,.2f}")
+    c2.metric("Bank Cost", f"{bank_cost.sum():,.0f}")
+    c3.metric("Platform Profit", f"{platform_profit.sum():,.0f}")
+
+    # Interpretation
+    st.subheader("Insight")
+
+    if q > p * 1000:
+        st.success("Network effects dominate (UPI-like)")
+    elif shock_type == "Break":
+        st.warning("Structural break detected (IMPS-like)")
+    elif shock_type == "Mandate":
+        st.info("Policy-driven adoption (FASTag-like)")
+    else:
+        st.write("Moderate diffusion")
 
 # -------------------------------
-# METRICS
+# FIT REAL DATA MODE
 # -------------------------------
-st.subheader("📊 Key Insights")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric("Total Users (M)", f"{cumulative_shock[-1]:,.2f}")
-
-with col2:
-    st.metric("Bank Total Cost (₹)", f"{bank_cost.sum():,.0f}")
-
-with col3:
-    st.metric("Platform Profit (₹)", f"{platform_profit.sum():,.0f}")
-
-# -------------------------------
-# INTERPRETATION
-# -------------------------------
-st.markdown("### 🧠 Interpretation")
-
-if q > p * 1000:
-    st.success("Imitation dominates → Network effects drive explosive growth (UPI-like)")
-elif shock_type == "Break (COVID)":
-    st.warning("Structural break → adoption deviates permanently (IMPS-like)")
-elif shock_type == "Mandate (FASTag)":
-    st.info("Policy-driven adoption → model fails to predict spike")
 else:
-    st.write("Balanced growth → moderate diffusion pattern")
+    st.subheader("Upload Data")
+
+    file = st.file_uploader("Upload CSV with 'time' and 'adoption' columns")
+
+    if file:
+        df = pd.read_csv(file)
+
+        y = df["adoption"].values
+        T = len(y)
+
+        def loss(params):
+            p, q, M = params
+            _, pred = bass_model(p, q, M, T)
+            return np.mean((y - pred) ** 2)
+
+        result = minimize(loss, [0.001, 0.1, max(y)], bounds=[(1e-6,1),(1e-6,1),(max(y), 10*max(y))])
+
+        p_fit, q_fit, M_fit = result.x
+
+        _, pred = bass_model(p_fit, q_fit, M_fit, T)
+
+        st.write("### Estimated Parameters")
+        st.write(f"p: {p_fit:.6f}")
+        st.write(f"q: {q_fit:.4f}")
+        st.write(f"M: {M_fit:.2f}")
+
+        fig, ax = plt.subplots()
+        ax.plot(y, label="Actual")
+        ax.plot(pred, label="Fitted Bass", linestyle="--")
+        ax.legend()
+
+        st.pyplot(fig)
+
+        # Export
+        output = pd.DataFrame({"Actual": y, "Fitted": pred})
+        st.download_button("Download Results", output.to_csv(index=False), "results.csv")
