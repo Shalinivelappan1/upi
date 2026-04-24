@@ -6,20 +6,19 @@ import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 
-# -----------------------------
+# ---------------------------------------------------
 # HEADER
-# -----------------------------
+# ---------------------------------------------------
 st.title("📱 Banking Lab V5 — UPI, FinTech & Who Pays the Bill?")
-st.caption("Payments are free for users, but someone pays — Stylized economics for teaching")
+st.caption("Payments are free for users, but someone pays — Developed for teaching & research")
+st.warning("⚠️ Educational use only. Stylized economics.")
 
-st.warning("⚠️ Educational use only. Stylized model — not regulatory advice.")
-
-# -----------------------------
+# ---------------------------------------------------
 # SIDEBAR
-# -----------------------------
+# ---------------------------------------------------
 st.sidebar.header("📈 Scale of the System")
 users_m = st.sidebar.slider("Active Users (Millions)", 1, 500, 100)
-tx_per_user = st.sidebar.slider("Transactions per User / Month", 1, 100, 30)
+tx_per_user = st.sidebar.slider("Transactions per User per Month", 1, 100, 30)
 
 st.sidebar.header("🏗 Payment System Costs")
 infra_cost = st.sidebar.slider("Platform Infra Cost per Tx (₹)", 0.1, 2.0, 0.5)
@@ -37,9 +36,9 @@ st.sidebar.header("💰 Float / Wallet")
 avg_balance = st.sidebar.slider("Avg Wallet Balance (₹)", 0, 5000, 1000)
 float_return = st.sidebar.slider("Return on Float (%)", 0.0, 10.0, 4.0) / 100
 
-# -----------------------------
+# ---------------------------------------------------
 # CORE CALCULATIONS
-# -----------------------------
+# ---------------------------------------------------
 users = users_m * 1_000_000
 annual_tx = users * tx_per_user * 12
 
@@ -47,20 +46,18 @@ platform_cost_total = annual_tx * infra_cost
 bank_cost_total = annual_tx * bank_cost
 platform_fee_revenue = annual_tx * fee
 
-# Lending
 loan_users = users * conversion
 loan_book = loan_users * loan_size
 lending_profit = loan_book * nim
 
-# Float
 float_pool = users * avg_balance
 float_income = float_pool * float_return
 
 platform_profit = platform_fee_revenue + lending_profit + float_income - platform_cost_total
 
-# -----------------------------
+# ---------------------------------------------------
 # TABS
-# -----------------------------
+# ---------------------------------------------------
 tabs = st.tabs([
     "🧩 System Economics",
     "📊 Diffusion Lab",
@@ -69,9 +66,9 @@ tabs = st.tabs([
     "🧠 Intuition Summary"
 ])
 
-# -----------------------------
+# ---------------------------------------------------
 # TAB 1: SYSTEM ECONOMICS
-# -----------------------------
+# ---------------------------------------------------
 with tabs[0]:
     st.subheader("🧩 UPI / Payment System at National Scale")
 
@@ -90,33 +87,57 @@ with tabs[0]:
     st.metric("Platform Profit", f"₹{platform_profit/1e7:.2f} Cr")
 
     if platform_profit > 0:
-        st.success("🙂 The platform is PROFITABLE — driven by cross-subsidy.")
+        st.success("🙂 The platform is PROFITABLE — thanks to cross-subsidy.")
     else:
-        st.error("⚠️ The platform is NOT sustainable without subsidy.")
+        st.error("⚠️ Platform is NOT sustainable without cross-subsidy.")
 
-# -----------------------------
+# ---------------------------------------------------
 # TAB 2: DIFFUSION LAB
-# -----------------------------
+# ---------------------------------------------------
 with tabs[1]:
-    st.subheader("📊 Bass Diffusion Model (Fit from Data)")
+    st.subheader("📊 Bass Diffusion Model (Upload Your Data)")
 
-    uploaded_file = st.file_uploader("Upload CSV (columns: Period, Volume)", type=["csv"])
+    uploaded_file = st.file_uploader("Upload CSV (Period, Volume)", type=["csv"])
 
     if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-
-        t = df['Period'].values
-        y = df['Volume'].values
-
-        def bass_model(t, p, q, m):
-            exp_term = np.exp(-(p + q) * t)
-            return m * (1 - exp_term) / (1 + (q / p) * exp_term)
-
         try:
-            params, _ = curve_fit(bass_model, t, y, bounds=(0, [1, 1, 1e5]))
+            df = pd.read_csv(uploaded_file)
+            df.columns = df.columns.str.strip()
+
+            # CLEAN DATA
+            df['Volume'] = (
+                df['Volume']
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .astype(float)
+            )
+
+            df['Period'] = pd.to_numeric(df['Period'], errors='coerce')
+            df = df.dropna(subset=['Period', 'Volume'])
+
+            t = df['Period'].values
+            y = df['Volume'].values
+
+            # BASS MODEL
+            def bass_model(t, p, q, m):
+                exp_term = np.exp(-(p + q) * t)
+                return m * (1 - exp_term) / (1 + (q / p) * exp_term)
+
+            initial_guess = [1e-5, 0.05, max(y) * 1.5]
+
+            params, _ = curve_fit(
+                bass_model,
+                t,
+                y,
+                p0=initial_guess,
+                bounds=([1e-7, 1e-4, max(y)], [1, 1, max(y)*10]),
+                maxfev=20000
+            )
+
             p, q, m = params
 
-            st.success(f"Estimated p={p:.6f}, q={q:.4f}, M={m:.0f}")
+            st.success(f"p = {p:.6f} | q = {q:.4f} | M = {m:.0f}")
+            st.metric("q/p Ratio", f"{q/p:.0f}x")
 
             forecast = bass_model(t, p, q, m)
 
@@ -126,33 +147,31 @@ with tabs[1]:
 
             st.plotly_chart(fig, use_container_width=True)
 
-            st.metric("q/p Ratio", f"{q/p:.0f}x")
+        except Exception as e:
+            st.error(f"Model fitting failed: {e}")
 
-        except:
-            st.error("Model fitting failed. Check data format.")
-
-# -----------------------------
+# ---------------------------------------------------
 # TAB 3: WHO PAYS WHAT
-# -----------------------------
+# ---------------------------------------------------
 with tabs[2]:
-    st.subheader("⚖️ Value Flow Analysis")
+    st.subheader("⚖️ Value Flow")
 
-    st.write(f"💸 Banks bear cost: ₹{bank_cost_total/1e7:.2f} Cr")
+    st.write(f"🏦 Banks bear cost: ₹{bank_cost_total/1e7:.2f} Cr")
     st.write(f"🏗 Platform infra cost: ₹{platform_cost_total/1e7:.2f} Cr")
 
-    st.write(f"💳 Platform earns fees: ₹{platform_fee_revenue/1e7:.2f} Cr")
+    st.write(f"💳 Fee revenue: ₹{platform_fee_revenue/1e7:.2f} Cr")
     st.write(f"📈 Lending profit: ₹{lending_profit/1e7:.2f} Cr")
     st.write(f"💰 Float income: ₹{float_income/1e7:.2f} Cr")
 
-    st.info("👉 Banks subsidize infrastructure. Platforms monetize users.")
+    st.info("👉 Banks subsidize the rails. Platforms monetize behavior.")
 
-# -----------------------------
+# ---------------------------------------------------
 # TAB 4: SCALE VS SUSTAINABILITY
-# -----------------------------
+# ---------------------------------------------------
 with tabs[3]:
     st.subheader("📈 Scaling Dynamics")
 
-    tx_range = np.linspace(1e6, annual_tx, 50)
+    tx_range = np.linspace(1e6, annual_tx, 100)
 
     cost_curve = tx_range * infra_cost
     revenue_curve = tx_range * fee
@@ -163,11 +182,11 @@ with tabs[3]:
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.warning("⚠️ Scale increases costs linearly — revenue must come from cross-subsidy.")
+    st.warning("⚠️ Scale increases cost linearly. Profit requires cross-subsidy.")
 
-# -----------------------------
+# ---------------------------------------------------
 # TAB 5: INTUITION
-# -----------------------------
+# ---------------------------------------------------
 with tabs[4]:
     st.subheader("🧠 Core Insight")
 
@@ -178,12 +197,12 @@ with tabs[4]:
     Merchants often pay ₹0.
 
     But:
-    - Banks absorb infrastructure and compliance cost
-    - Platforms monetize via:
+    - Banks absorb operational and compliance cost
+    - Platforms monetize through:
         • Lending
         • Float
-        • Data & ecosystem lock-in
+        • Data ecosystems
 
-    👉 Scale does NOT fix unit economics.
-    👉 It amplifies the subsidy burden — unless monetization kicks in.
+    👉 Scale does NOT fix unit economics
+    👉 It amplifies the subsidy burden
     """)
